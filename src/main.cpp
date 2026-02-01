@@ -1,10 +1,14 @@
 #include <SFML/Graphics.hpp>
+#include <array>
 #include <cmath>
+#include <iomanip>
+#include <sstream>
+#include <string>
 #include <vector>
 
 const float PI = 3.14159265f;
 
-// Cauchy's equation with INCREASED dispersion
+// --- Physics ---
 float getN(float wl) {
   float l = wl / 1000.f;
   return 1.5046f + 0.012f / (l * l);
@@ -17,7 +21,6 @@ sf::Vector2f norm(sf::Vector2f v) {
 }
 float dot(sf::Vector2f a, sf::Vector2f b) { return a.x * b.x + a.y * b.y; }
 
-// Refract direction using Snell's law
 sf::Vector2f refractDir(sf::Vector2f incident, sf::Vector2f normal, float n1,
                         float n2) {
   float cosI = -dot(incident, normal);
@@ -29,7 +32,175 @@ sf::Vector2f refractDir(sf::Vector2f incident, sf::Vector2f normal, float n1,
   return incident * ratio + normal * (ratio * cosI - cosT);
 }
 
-// Ray-line intersection
+// --- Geometry ---
+struct Prism {
+  sf::Vector2f pos;
+  float size;
+  float rotation; // Radians
+  std::string name;
+
+  std::array<sf::Vector2f, 3> getVertices() const {
+    std::array<sf::Vector2f, 3> v;
+    for (int i = 0; i < 3; i++) {
+      // Equilateral triangle logic
+      float angle = rotation + i * 2 * PI / 3 - PI / 2;
+      v[i] = pos + sf::Vector2f(std::cos(angle), std::sin(angle)) * size;
+    }
+    return v;
+  }
+};
+
+struct LightSource {
+  sf::Vector2f pos;
+  float angle; // Radians
+};
+
+struct Ray {
+  sf::Color color;
+  float wavelength;
+  std::vector<sf::Vector2f> points;
+  bool valid = false;
+};
+
+// --- UI Framework ---
+struct UIState {
+  int activeId = -1; // ID of element being interacted with
+  int hotId = -1;    // ID of element hovered
+  bool mousePressed = false;
+  sf::Vector2f mousePos;
+};
+
+class SimpleUI {
+public:
+  SimpleUI(sf::RenderWindow &win) : window(win) {
+    if (!font.openFromFile("C:/Windows/Fonts/arial.ttf")) {
+      // Fallback if arial not found (unlikely on Windows)
+    }
+  }
+
+  void begin() {
+    sf::Vector2i mp = sf::Mouse::getPosition(window);
+    state.mousePos = sf::Vector2f(mp.x, mp.y);
+    state.mousePressed = sf::Mouse::isButtonPressed(sf::Mouse::Button::Left);
+    state.hotId = -1;
+  }
+
+  bool button(int id, const std::string &label, sf::Vector2f pos,
+              sf::Vector2f size) {
+    sf::RectangleShape rect(size);
+    rect.setPosition(pos);
+
+    bool hovered = rect.getGlobalBounds().contains(state.mousePos);
+    if (hovered)
+      state.hotId = id;
+
+    bool clicked = false;
+    if (state.activeId == id && !state.mousePressed) {
+      if (hovered)
+        clicked = true;
+      state.activeId = -1;
+    } else if (hovered && state.mousePressed && state.activeId == -1) {
+      state.activeId = id;
+    }
+
+    if (state.activeId == id)
+      rect.setFillColor(sf::Color(100, 100, 100));
+    else if (hovered)
+      rect.setFillColor(sf::Color(150, 150, 150));
+    else
+      rect.setFillColor(sf::Color(200, 200, 200));
+
+    window.draw(rect);
+
+    sf::Text text(font, label, 14);
+    text.setFillColor(sf::Color::Black);
+    sf::FloatRect bounds = text.getLocalBounds();
+    text.setPosition({pos.x + (size.x - bounds.size.x) / 2,
+                      pos.y + (size.y - bounds.size.y) / 2 - 2});
+    window.draw(text);
+
+    return clicked;
+  }
+
+  // Returns true if value changed
+  bool slider(int id, const std::string &label, float &value, float min,
+              float max, sf::Vector2f pos, float width) {
+    bool changed = false;
+    sf::RectangleShape bar(sf::Vector2f(width, 4));
+    bar.setPosition({pos.x, pos.y + 10});
+    bar.setFillColor(sf::Color(100, 100, 100));
+    window.draw(bar);
+
+    float t = (value - min) / (max - min);
+    float handleX = pos.x + t * width;
+    sf::CircleShape handle(8);
+    handle.setOrigin({8, 8});
+    handle.setPosition({handleX, pos.y + 12});
+
+    sf::FloatRect handleRect({handleX - 8, pos.y + 4}, {16, 16});
+    bool hovered = handleRect.contains(state.mousePos);
+    if (hovered)
+      state.hotId = id;
+
+    if (state.activeId == id) {
+      if (!state.mousePressed) {
+        state.activeId = -1;
+      } else {
+        float newT = (state.mousePos.x - pos.x) / width;
+        if (newT < 0)
+          newT = 0;
+        if (newT > 1)
+          newT = 1;
+        value = min + newT * (max - min);
+        changed = true;
+      }
+    } else if (hovered && state.mousePressed && state.activeId == -1) {
+      state.activeId = id;
+    }
+
+    handle.setFillColor(
+        state.activeId == id
+            ? sf::Color::White
+            : (hovered ? sf::Color(200, 200, 200) : sf::Color(150, 150, 150)));
+    window.draw(handle);
+
+    sf::Text lText(font, label, 14);
+    lText.setFillColor(sf::Color::White);
+    lText.setPosition({pos.x, pos.y - 15});
+    window.draw(lText);
+
+    std::stringstream ss;
+    ss << std::fixed << std::setprecision(1) << value;
+    sf::Text vText(font, ss.str(), 14);
+    vText.setFillColor(sf::Color::White);
+    vText.setPosition({pos.x + width + 10, pos.y});
+    window.draw(vText);
+
+    return changed;
+  }
+
+  void label(const std::string &text, sf::Vector2f pos, int size = 18,
+             sf::Color col = sf::Color::White) {
+    sf::Text t(font, text, size);
+    t.setFillColor(col);
+    t.setPosition(pos);
+    window.draw(t);
+  }
+
+  void panel(sf::Vector2f pos, sf::Vector2f size) {
+    sf::RectangleShape rect(size);
+    rect.setPosition(pos);
+    rect.setFillColor(sf::Color(30, 30, 30, 200));
+    window.draw(rect);
+  }
+
+private:
+  sf::RenderWindow &window;
+  sf::Font font;
+  UIState state;
+};
+
+// --- Main ---
 bool rayLineIntersect(sf::Vector2f origin, sf::Vector2f dir, sf::Vector2f p1,
                       sf::Vector2f p2, sf::Vector2f &hit, float &param) {
   sf::Vector2f edge = p2 - p1;
@@ -41,7 +212,7 @@ bool rayLineIntersect(sf::Vector2f origin, sf::Vector2f dir, sf::Vector2f p1,
   float t = (diff.y * edge.x - diff.x * edge.y) / denom;
   float s = (diff.y * dir.x - diff.x * dir.y) / denom;
 
-  if (t > 0.001f && s >= 0.f && s <= 1.f) {
+  if (t > 0.01f && s >= 0.f && s <= 1.f) {
     hit = p1 + edge * s;
     param = s;
     return true;
@@ -49,45 +220,36 @@ bool rayLineIntersect(sf::Vector2f origin, sf::Vector2f dir, sf::Vector2f p1,
   return false;
 }
 
-struct Ray {
-  sf::Color color;
-  float wavelength;
-  sf::Vector2f entry, exit, end;
-  bool ok = false;
-};
-
 int main() {
-  sf::RenderWindow window(sf::VideoMode({800, 600}),
-                          "Dispersion - Use mouse to aim light");
+  sf::RenderWindow window(sf::VideoMode({1000, 700}), "Dispersion Simulator");
+  SimpleUI ui(window);
 
-  // Prism vertices
-  sf::Vector2f A(400, 100), B(200, 500), C(600, 500);
+  // Scene Objects
+  LightSource source = {{50, 350}, 0.1f};
+  std::vector<Prism> prisms;
+  prisms.push_back({{350, 350}, 150.f, 0.f, "Prism 1"});
+  prisms.push_back({{650, 350}, 120.f, PI / 6, "Prism 2"});
 
-  // Normals
-  sf::Vector2f leftN = norm(sf::Vector2f(-(B - A).y, (B - A).x));
-  sf::Vector2f rightN = norm(sf::Vector2f(-(C - A).y, (C - A).x));
+  int selectedObjType = 0; // 0=None, 1=Light, 2=Prism
+  int selectedPrismIdx = -1;
 
-  // Light source - moveable
-  sf::Vector2f source(50, 260);
-  sf::Vector2f target(300, 300); // Where light is aimed
-
-  // Spectrum wavelengths
-  const int NUM_RAYS = 30;
+  // Rays
+  const int NUM_RAYS = 50;
   std::vector<Ray> baseRays(NUM_RAYS);
   for (int i = 0; i < NUM_RAYS; i++) {
     float t = (float)i / (NUM_RAYS - 1);
     float wl = 700.f - t * 300.f;
     baseRays[i].wavelength = wl;
 
-    // Color based on wavelength
-    if (wl >= 620) {
+    // Color mapping
+    if (wl >= 620)
       baseRays[i].color = sf::Color(255, 0, 0);
-    } else if (wl >= 590) {
+    else if (wl >= 590) {
       float f = (wl - 590) / 30.f;
       baseRays[i].color = sf::Color(255, (uint8_t)(165 * (1 - f)), 0);
-    } else if (wl >= 570) {
+    } else if (wl >= 570)
       baseRays[i].color = sf::Color(255, 255, 0);
-    } else if (wl >= 495) {
+    else if (wl >= 495) {
       float f = (wl - 495) / 75.f;
       baseRays[i].color = sf::Color((uint8_t)(255 * f), 255, 0);
     } else if (wl >= 450) {
@@ -101,129 +263,208 @@ int main() {
   }
 
   while (window.isOpen()) {
-    // Event handling
     while (const std::optional ev = window.pollEvent()) {
       if (ev->is<sf::Event::Closed>())
         window.close();
-
-      // Move source with arrow keys
-      if (ev->is<sf::Event::KeyPressed>()) {
-        auto key = ev->getIf<sf::Event::KeyPressed>();
-        float speed = 10.f;
-        if (key->code == sf::Keyboard::Key::Up)
-          source.y -= speed;
-        if (key->code == sf::Keyboard::Key::Down)
-          source.y += speed;
-        if (key->code == sf::Keyboard::Key::Left)
-          source.x -= speed;
-        if (key->code == sf::Keyboard::Key::Right)
-          source.x += speed;
-      }
-
-      // Aim with mouse
-      if (ev->is<sf::Event::MouseMoved>()) {
-        auto mouse = ev->getIf<sf::Event::MouseMoved>();
-        target =
-            sf::Vector2f((float)mouse->position.x, (float)mouse->position.y);
-      }
     }
 
-    // Calculate ray direction
-    sf::Vector2f inDir = norm(target - source);
+    // UI Interaction Start
+    ui.begin();
 
-    // Find entry point on prism (left edge A-B)
-    sf::Vector2f entry;
-    float param;
-    bool hasEntry = rayLineIntersect(source, inDir, A, B, entry, param);
-
-    // Calculate rays
+    // --- Update Simulation ---
     std::vector<Ray> rays = baseRays;
-    if (hasEntry) {
-      for (auto &r : rays) {
-        r.entry = entry;
-        r.ok = false;
+    sf::Vector2f srcPos = source.pos;
+    sf::Vector2f srcDir =
+        sf::Vector2f(std::cos(source.angle), std::sin(source.angle));
 
-        float n = getN(r.wavelength);
+    for (auto &ray : rays) {
+      ray.points.clear();
+      ray.points.push_back(srcPos);
 
-        // Refract at entry
-        sf::Vector2f intDir = refractDir(inDir, leftN, 1.f, n);
-        if (len(intDir) < 0.5f)
-          continue;
-        intDir = norm(intDir);
+      sf::Vector2f currPos = srcPos;
+      sf::Vector2f currDir = srcDir;
+      const int MAX_BOUNCES = 10;
 
-        // Find exit on right edge (A-C)
-        sf::Vector2f exitPoint;
-        float exitParam;
-        if (rayLineIntersect(entry, intDir, A, C, exitPoint, exitParam)) {
-          r.exit = exitPoint;
+      for (int b = 0; b < MAX_BOUNCES; b++) {
+        float closestDist = 100000.f;
+        sf::Vector2f closestHit, closestNormal;
+        bool hitFound = false;
 
-          // Refract at exit
-          sf::Vector2f exitDir = refractDir(intDir, rightN, n, 1.f);
-          if (len(exitDir) < 0.5f)
-            continue;
-          exitDir = norm(exitDir);
+        for (const auto &p : prisms) {
+          auto verts = p.getVertices();
+          for (int i = 0; i < 3; i++) {
+            sf::Vector2f p1 = verts[i];
+            sf::Vector2f p2 = verts[(i + 1) % 3];
+            sf::Vector2f hit;
+            float param;
+            if (rayLineIntersect(currPos, currDir, p1, p2, hit, param)) {
+              if (len(hit - currPos) < 1.0f)
+                continue; // Ignore bias
+              float dist = len(hit - currPos);
+              if (dist < closestDist) {
+                closestDist = dist;
+                closestHit = hit;
 
-          r.end = r.exit + exitDir * 300.f;
-          r.ok = true;
+                sf::Vector2f edge = p2 - p1;
+                sf::Vector2f normal = norm(sf::Vector2f(-edge.y, edge.x));
+                // Check if normal points out
+                sf::Vector2f center = p.pos; // Approximation for equilateral
+                sf::Vector2f mid = (p1 + p2) * 0.5f;
+                if (dot(normal, mid - center) < 0)
+                  normal = -normal; // Ensure outward
+
+                closestNormal = normal;
+                hitFound = true;
+              }
+            }
+          }
         }
+
+        if (!hitFound) {
+          ray.points.push_back(currPos + currDir * 2000.f);
+          ray.valid = true;
+          break;
+        }
+
+        ray.points.push_back(closestHit);
+
+        // Refraction
+        float n_ray = getN(ray.wavelength);
+        float n1 = 1.0f, n2 = n_ray;
+        sf::Vector2f nVec = closestNormal;
+
+        // Entering or Exiting?
+        if (dot(currDir, closestNormal) >
+            0) { // Same direction = hitting inside face = Exiting
+          n1 = n_ray;
+          n2 = 1.0f;
+          nVec = -closestNormal; // Invert normal to point against incident
+        } else {
+          // Hitting outside face = Entering
+          n1 = 1.0f;
+          n2 = n_ray;
+          nVec = closestNormal;
+        }
+
+        sf::Vector2f newDir = refractDir(currDir, nVec, n1, n2);
+        if (len(newDir) < 0.1f)
+          break; // TIR stop
+
+        currDir = norm(newDir);
+        currPos = closestHit + currDir * 0.1f; // Bias
       }
     }
 
-    // Render
+    // --- Render ---
     window.clear(sf::Color::Black);
 
-    // Draw prism
-    sf::VertexArray prism(sf::PrimitiveType::LineStrip, 4);
-    prism[0].position = A;
-    prism[1].position = B;
-    prism[2].position = C;
-    prism[3].position = A;
-    for (int i = 0; i < 4; i++)
-      prism[i].color = sf::Color::White;
-    window.draw(prism);
-
-    // Draw source indicator
-    sf::CircleShape srcCircle(5);
-    srcCircle.setFillColor(sf::Color::Yellow);
-    srcCircle.setPosition(source - sf::Vector2f(5, 5));
-    window.draw(srcCircle);
-
-    // Draw white incident ray
-    if (hasEntry) {
-      sf::VertexArray w(sf::PrimitiveType::Lines, 2);
-      w[0].position = source;
-      w[0].color = sf::Color::White;
-      w[1].position = entry;
-      w[1].color = sf::Color::White;
-      window.draw(w);
-    } else {
-      // Draw ray going to target if no hit
-      sf::VertexArray w(sf::PrimitiveType::Lines, 2);
-      w[0].position = source;
-      w[0].color = sf::Color(100, 100, 100);
-      w[1].position = source + inDir * 500.f;
-      w[1].color = sf::Color(100, 100, 100);
-      window.draw(w);
+    // Draw Prisms
+    for (size_t i = 0; i < prisms.size(); i++) {
+      auto v = prisms[i].getVertices();
+      sf::VertexArray p(sf::PrimitiveType::LineStrip, 4);
+      sf::Color col = (selectedObjType == 2 && selectedPrismIdx == (int)i)
+                          ? sf::Color::Yellow
+                          : sf::Color::White;
+      for (int k = 0; k < 3; k++) {
+        p[k].position = v[k];
+        p[k].color = col;
+      }
+      p[3].position = v[0];
+      p[3].color = col;
+      window.draw(p);
     }
 
-    // Draw colored rays
-    for (auto &r : rays) {
-      if (r.ok) {
-        sf::VertexArray in(sf::PrimitiveType::Lines, 2);
-        in[0].position = r.entry;
-        in[0].color = r.color;
-        in[1].position = r.exit;
-        in[1].color = r.color;
-        window.draw(in);
+    // Draw Source
+    sf::CircleShape srcCircle(8);
+    srcCircle.setOrigin({8, 8});
+    srcCircle.setPosition(source.pos);
+    srcCircle.setFillColor(selectedObjType == 1 ? sf::Color::Yellow
+                                                : sf::Color(200, 200, 200));
+    window.draw(srcCircle);
+    // Source direction hint
+    sf::VertexArray dirHint(sf::PrimitiveType::Lines, 2);
+    dirHint[0].position = source.pos;
+    dirHint[0].color = sf::Color(100, 100, 100);
+    dirHint[1].position =
+        source.pos +
+        sf::Vector2f(std::cos(source.angle), std::sin(source.angle)) * 50.f;
+    dirHint[1].color = sf::Color(100, 100, 100);
+    window.draw(dirHint);
 
-        sf::VertexArray out(sf::PrimitiveType::Lines, 2);
-        out[0].position = r.exit;
-        out[0].color = r.color;
-        out[1].position = r.end;
-        out[1].color = r.color;
-        window.draw(out);
+    // Draw Rays
+    // Draw Rays
+    for (auto &ray : rays) {
+      if (ray.points.size() < 2)
+        continue;
+
+      sf::VertexArray line(sf::PrimitiveType::Lines);
+      for (size_t i = 0; i < ray.points.size() - 1; i++) {
+        sf::Vertex v1;
+        v1.position = ray.points[i];
+
+        sf::Vertex v2;
+        v2.position = ray.points[i + 1];
+
+        // First segment (Source -> Entry) is white
+        if (i == 0) {
+          v1.color = sf::Color::White;
+          v2.color = sf::Color::White;
+        } else {
+          v1.color = ray.color;
+          v2.color = ray.color;
+        }
+
+        line.append(v1);
+        line.append(v2);
+      }
+      window.draw(line);
+    }
+
+    // --- Draw UI ---
+    // Sidebar background
+    ui.panel({800, 0}, {200, 700});
+    ui.label("Configuration", {810, 10});
+
+    // Object Selection
+    ui.label("Select Object:", {810, 40}, 14);
+    if (ui.button(100, "Light Source", {810, 65}, {180, 30})) {
+      selectedObjType = 1;
+    }
+    for (size_t i = 0; i < prisms.size(); i++) {
+      std::string label = prisms[i].name;
+      if (ui.button(101 + i, label, {810, 105.f + i * 40}, {180, 30})) {
+        selectedObjType = 2;
+        selectedPrismIdx = i;
       }
     }
+
+    // Properties Panel
+    if (selectedObjType == 1) { // Light
+      ui.label("Light Properties", {810, 250});
+      ui.slider(200, "Pos X", source.pos.x, 0, 800, {810, 280}, 140);
+      ui.slider(201, "Pos Y", source.pos.y, 0, 700, {810, 330}, 140);
+      float deg = source.angle * 180 / PI;
+      if (ui.slider(202, "Angle", deg, -180, 180, {810, 380}, 140)) {
+        source.angle = deg * PI / 180.f;
+      }
+
+    } else if (selectedObjType == 2 && selectedPrismIdx >= 0 &&
+               selectedPrismIdx < (int)prisms.size()) {
+      Prism &p = prisms[selectedPrismIdx];
+      ui.label("Prism Properties", {810, 250});
+      ui.slider(300, "Pos X", p.pos.x, 0, 800, {810, 280}, 140);
+      ui.slider(301, "Pos Y", p.pos.y, 0, 700, {810, 330}, 140);
+      ui.slider(302, "Size", p.size, 50, 300, {810, 380}, 140);
+      float deg = p.rotation * 180 / PI;
+      if (ui.slider(303, "Rotation", deg, 0, 360, {810, 430}, 140)) {
+        p.rotation = deg * PI / 180.f;
+      }
+    } else {
+      ui.label("No selection", {810, 250}, 14, sf::Color(150, 150, 150));
+    }
+
+    // Instructions
+    ui.label("Use UI to configure", {810, 650}, 12, sf::Color::Green);
 
     window.display();
   }
