@@ -29,7 +29,4 @@ target_link_libraries(BrokenGlass
 add_custom_command(TARGET BrokenGlass POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
     "${CMAKE_SOURCE_DIR}/dll"
-    "$<TARGET_FILE_DIR:BrokenGlass>"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-    "${CMAKE_SOURCE_DIR}/assets"
-    "$<TARGET_FILE_DIR:BrokenGlass>/assets")
+    "$<TARGET_FILE_DIR:BrokenGlass>")
