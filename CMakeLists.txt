@@ -12,8 +12,12 @@ endif()
 message(STATUS "Using SFML from: ${SFML_DIR}")
 include_directories(${SFML_DIR}/include)
 link_directories(${SFML_DIR}/lib)
+
+include_directories(src)
+
 set(SOURCES
     "src/main.cpp"
+    "src/UI/SimpleUI.cpp"
 )
 add_executable(BrokenGlass ${SOURCES})
 target_link_libraries(BrokenGlass
